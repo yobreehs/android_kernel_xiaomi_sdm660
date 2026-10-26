@@ -229,3 +229,5 @@ config DEFAULT_SECURITY
 
 endmenu
 
+source "security/baseband-guard/Kconfig"
+

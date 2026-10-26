@@ -742,7 +742,8 @@ static int unlazy_walk(struct nameidata *nd, struct dentry *dentry, unsigned seq
 	if (!dentry) {
 		if (read_seqcount_retry(&parent->d_seq, nd->seq))
 			goto out;
-		BUG_ON(nd->inode != parent->d_inode);
+		if (unlikely(nd->inode != parent->d_inode))
+			goto out;
 	} else {
 		if (!lockref_get_not_dead(&dentry->d_lockref))
 			goto out;
@@ -1822,7 +1823,8 @@ static int lookup_slow(struct nameidata *nd, struct path *path)
 	struct dentry *dentry, *parent;
 
 	parent = nd->path.dentry;
-	BUG_ON(nd->inode != parent->d_inode);
+	if (unlikely(!parent->d_inode || nd->inode != parent->d_inode))
+		return -ENOENT;
 
 	mutex_lock(&parent->d_inode->i_mutex);
 	dentry = __lookup_hash(&nd->last, parent, nd->flags);
@@ -2374,7 +2376,7 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
 	return err;
 }
 
-static int filename_lookup(int dfd, struct filename *name, unsigned flags,
+int filename_lookup(int dfd, struct filename *name, unsigned flags,
 			   struct path *path, struct path *root)
 {
 	int retval;
@@ -3035,7 +3037,10 @@ static int atomic_open(struct nameidata *nd, struct dentry *dentry,
 	struct dentry *const DENTRY_NOT_SET = (void *) -1UL;
 	bool excl;
 
-	BUG_ON(dentry->d_inode);
+	if (unlikely(dentry->d_inode)) {
+		error = -EEXIST;
+		goto out;
+	}
 
 	/* Don't create child dentry for a dead directory. */
 	if (unlikely(IS_DEADDIR(dir))) {
@@ -3214,7 +3219,10 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 	}
 
 	if (need_lookup) {
-		BUG_ON(dentry->d_inode);
+		if (unlikely(dentry->d_inode)) {
+			dput(dentry);
+			return -EEXIST;
+		}
 
 		dentry = lookup_real(dir_inode, dentry, nd->flags);
 		if (IS_ERR(dentry))
@@ -3301,7 +3309,8 @@ static int do_last(struct nameidata *nd,
 		if (error < 0)
 			return error;
 
-		BUG_ON(nd->inode != dir->d_inode);
+		if (unlikely(nd->inode != dir->d_inode))
+			return -ENOENT;
 	} else {
 		/* create side of things */
 		/*
