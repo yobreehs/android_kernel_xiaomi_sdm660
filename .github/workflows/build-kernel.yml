@@ -51,9 +51,9 @@ jobs:
       - name: Set up toolchain PATH
         run: |
           set -euo pipefail
-          CLANG_BIN=$(dirname "$(find tc -path '*/bin/clang' | head -1)")
-          GCC64_BIN=$(dirname "$(find tc -path '*/bin/aarch64-linux-android-elfedit' | head -1)")
-          GCC32_BIN=$(dirname "$(find tc -path '*/bin/arm-linux-androideabi-elfedit' | head -1)")
+          CLANG_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/clang' | head -1)")")
+          GCC64_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/aarch64-linux-android-elfedit' | head -1)")")
+          GCC32_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/arm-linux-androideabi-elfedit' | head -1)")")
           echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
           echo "GCC64_BIN=$GCC64_BIN" >> "$GITHUB_ENV"
           echo "GCC32_BIN=$GCC32_BIN" >> "$GITHUB_ENV"
