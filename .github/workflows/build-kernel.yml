@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - baka-11
+      - 'test-*'
 
 permissions:
   contents: read
@@ -180,7 +181,7 @@ jobs:
           is_slot_device=0
           ramdisk_compression=auto
           EOF
-          (cd anykernel && zip -r9 "../clover-kernel-4.4.250-baka-${GITHUB_RUN_NUMBER}.zip" . -x '.git/*')
+          (cd anykernel && zip -r9 "../clover-kernel-4.4.250-${GITHUB_REF_NAME}-${GITHUB_RUN_NUMBER}.zip" . -x '.git/*')
 
       - name: Package component sources
         run: |
@@ -206,7 +207,7 @@ jobs:
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: clover-kernel-4.4.250-baka
+          name: clover-kernel-4.4.250-${{ github.ref_name }}
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
