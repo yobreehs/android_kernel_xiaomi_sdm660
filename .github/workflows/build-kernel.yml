@@ -203,7 +203,7 @@ jobs:
           (cd dist/nomount && zip -r9 ../nomount-4.4.250-src.zip .)
           ls -lh dist/*.zip
 
-      - name: Upload artifacts
+      - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
           name: clover-kernel-4.4.250-baka
@@ -211,9 +211,22 @@ jobs:
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
             clover-kernel-*.zip
-            manager/spoofed/*arm64-v8a*-spoofed.apk
-            manager/spoofed/*universal*-spoofed.apk
-            dist/*.zip
             kernel-config.txt
             build.log
+          if-no-files-found: warn
+
+      - name: Upload spoofed manager artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baka-manager-spoofed
+          path: |
+            manager/spoofed/*arm64-v8a*-spoofed.apk
+            manager/spoofed/*universal*-spoofed.apk
+          if-no-files-found: warn
+
+      - name: Upload component sources artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: susfs-nomount-sources
+          path: dist/*.zip
           if-no-files-found: warn
