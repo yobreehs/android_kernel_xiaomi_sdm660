@@ -39,7 +39,7 @@ jobs:
             | tar -xz -C tc/gcc64
           curl -fsSL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android11-release.tar.gz" \
             | tar -xz -C tc/gcc32
-          find tc -maxdepth 4 -type f -name clang -o -name aarch64-linux-android-gcc -o -name arm-linux-androideabi-gcc
+          find tc -maxdepth 4 -type f -name clang -o -name aarch64-linux-android-elfedit -o -name arm-linux-androideabi-elfedit
 
       - name: Save toolchains
         if: steps.tc-cache.outputs.cache-hit != 'true'
@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           CLANG_BIN=$(dirname "$(find tc -path '*/bin/clang' | head -1)")
-          GCC64_BIN=$(dirname "$(find tc -path '*/bin/aarch64-linux-android-gcc' | head -1)")
-          GCC32_BIN=$(dirname "$(find tc -path '*/bin/arm-linux-androideabi-gcc' | head -1)")
+          GCC64_BIN=$(dirname "$(find tc -path '*/bin/aarch64-linux-android-elfedit' | head -1)")
+          GCC32_BIN=$(dirname "$(find tc -path '*/bin/arm-linux-androideabi-elfedit' | head -1)")
           echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
           echo "GCC64_BIN=$GCC64_BIN" >> "$GITHUB_ENV"
           echo "GCC32_BIN=$GCC32_BIN" >> "$GITHUB_ENV"
@@ -61,7 +61,7 @@ jobs:
           echo "$GCC64_BIN" >> "$GITHUB_PATH"
           echo "$GCC32_BIN" >> "$GITHUB_PATH"
           "$CLANG_BIN/clang" --version
-          "$GCC64_BIN/aarch64-linux-android-gcc" --version | head -1
+          "$GCC64_BIN/aarch64-linux-android-as" --version | head -1
 
       - name: Install build deps
         run: |
