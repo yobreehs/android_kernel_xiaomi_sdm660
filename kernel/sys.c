@@ -5,6 +5,7 @@
  */
 
 #include <linux/export.h>
+#include <linux/jump_label.h>
 #include <linux/mm.h>
 #include <linux/utsname.h>
 #include <linux/mman.h>
