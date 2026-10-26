@@ -210,6 +210,18 @@ jobs:
           fi
           ls -lh dist/*.zip 2>/dev/null || true
 
+      - name: Package QCA module
+        run: |
+          set -euo pipefail
+          ko=$(find out -name 'qca_cld3_wlan.ko' | head -1)
+          if [ -n "$ko" ]; then
+            mkdir -p dist
+            cp "$ko" dist/
+            ls -lh dist/qca_cld3_wlan.ko
+          else
+            echo "WARN: qca_cld3_wlan.ko not found"
+          fi
+
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
@@ -218,6 +230,7 @@ jobs:
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
             clover-kernel-*.zip
+            dist/*.ko
             kernel-config.txt
             build.log
           if-no-files-found: warn
