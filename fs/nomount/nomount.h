@@ -16,6 +16,16 @@
 #include <linux/version.h>
 #include <linux/compat.h>
 
+/* in_compat_syscall() was added after 4.4; is_compat_task() is the
+ * 4.4-era equivalent for the current task. */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
+#ifdef CONFIG_COMPAT
+#define in_compat_syscall() is_compat_task()
+#else
+#define in_compat_syscall() 0
+#endif
+#endif
+
 #define NOMOUNT_BASE_VERSION "22"
 #ifdef NOMOUNT_COMMIT_COUNT
     #define NOMOUNT_VERSION ""NOMOUNT_BASE_VERSION" ("NOMOUNT_COMMIT_COUNT")"
