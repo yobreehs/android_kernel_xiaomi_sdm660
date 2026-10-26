@@ -90,16 +90,16 @@ jobs:
       - name: Fetch BakaSU manager (nightly) and sync KSU version
         run: |
           set -euo pipefail
-          mkdir -p manager
-          curl -fL --retry 3 -o manager/Manager-release.zip \
+          mkdir -p manager/normal manager/spoofed
+          curl -fL --retry 3 -o manager/normal/Manager-release.zip \
             "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Manager-release.zip" \
-            || { echo "::warning::normal manager download failed"; : > manager/Manager-release.zip; }
-          curl -fL --retry 3 -o manager/Spoofed-Manager-release.zip \
+            || { echo "::warning::normal manager download failed"; : > manager/normal/Manager-release.zip; }
+          curl -fL --retry 3 -o manager/spoofed/Spoofed-Manager-release.zip \
             "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Spoofed-Manager-release.zip" \
-            || { echo "::warning::spoofed manager download failed"; : > manager/Spoofed-Manager-release.zip; }
+            || { echo "::warning::spoofed manager download failed"; : > manager/spoofed/Spoofed-Manager-release.zip; }
 
           KSU_VERSION=""
-          for z in manager/Manager-release.zip manager/Spoofed-Manager-release.zip; do
+          for z in manager/spoofed/Spoofed-Manager-release.zip manager/normal/Manager-release.zip; do
             [ -s "$z" ] || continue
             v=$(unzip -Z1 "$z" | sed -nE 's/.*_([0-9]+)-(universal|arm64-v8a)-release\.apk$/\1/p' | head -1)
             [ -n "$v" ] && KSU_VERSION="$v"
@@ -110,12 +110,22 @@ jobs:
           fi
           echo "KSU_VERSION=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "KSU version: $KSU_VERSION"
-          for z in manager/*.zip; do
-            if [ -s "$z" ]; then
-              unzip -o -q "$z" -d manager/
-            fi
+
+          for z in manager/normal/Manager-release.zip manager/spoofed/Spoofed-Manager-release.zip; do
+            [ -s "$z" ] || continue
+            case "$z" in
+              */normal/*) dest=manager/normal ;;
+              *)          dest=manager/spoofed ;;
+            esac
+            unzip -o -q "$z" -d "$dest"
           done
-          ls -lh manager/
+          # The spoofed and normal APKs have identical filenames; mark the
+          # spoofed ones so both can live in the artifact side by side.
+          for f in manager/spoofed/*.apk; do
+            [ -e "$f" ] || continue
+            mv "$f" "${f%.apk}-spoofed.apk"
+          done
+          ls -lh manager/normal manager/spoofed
 
       - name: Build kernel
         run: |
@@ -172,19 +182,38 @@ jobs:
           EOF
           (cd anykernel && zip -r9 "../clover-kernel-4.4.250-baka-${GITHUB_RUN_NUMBER}.zip" . -x '.git/*')
 
+      - name: Package component sources
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/susfs dist/nomount
+          cp fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h dist/susfs/
+          printf '%s\n' \
+            'SUSFS v2.3.0 - kernel-side source, backported to Linux 4.4.250 (clover).' \
+            'Integrated into BakaSU (ex-ReSukiSU) v4.2.0-rc3, manager 35252.' \
+            'Files: susfs.c, susfs.h, susfs_def.h.' \
+            > dist/susfs/README.txt
+          cp -a fs/nomount/. dist/nomount/
+          printf '%s\n' \
+            'NoMount v2.2.0 - kernel-side source, 4.4 compatibility patched (clover).' \
+            'Upstream: https://github.com/maxsteeel/nomount (HEAD bf1847f).' \
+            'Integrated as fs/nomount, CONFIG_NOMOUNT=y.' \
+            > dist/nomount/README.txt
+          (cd dist/susfs && zip -r9 ../susfs-4.4.250-src.zip .)
+          (cd dist/nomount && zip -r9 ../nomount-4.4.250-src.zip .)
+          ls -lh dist/*.zip
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: clover-kernel-4.4.250-baka
           path: |
             out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz-dtb
             out/arch/arm64/boot/Image.gz
-            out/vmlinux
-            out/System.map
+            clover-kernel-*.zip
+            manager/spoofed/*arm64-v8a*-spoofed.apk
+            manager/spoofed/*universal*-spoofed.apk
+            dist/*.zip
             kernel-config.txt
             build.log
-            clover-kernel-*.zip
-            manager/*.zip
-            manager/*.apk
           if-no-files-found: warn
