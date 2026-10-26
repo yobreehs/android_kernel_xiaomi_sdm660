@@ -1,0 +1,233 @@
+name: Build clover kernel (BakaSU + SUSFS + NoMount + ReKernel)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - baka-11
+      - 'test-*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Restore toolchains
+        id: tc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tc
+          key: clover-tc-r383902b-gcc49-v1
+          restore-keys: clover-tc-
+
+      - name: Fetch native toolchains (clang 11.0.2 + GCC 4.9)
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p tc/clang tc/gcc64 tc/gcc32
+          curl -fsSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902b.tar.gz" \
+            | tar -xz -C tc/clang
+          curl -fsSL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android11-release.tar.gz" \
+            | tar -xz -C tc/gcc64
+          curl -fsSL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android11-release.tar.gz" \
+            | tar -xz -C tc/gcc32
+          find tc -maxdepth 4 -type f -name clang -o -name aarch64-linux-android-elfedit -o -name arm-linux-androideabi-elfedit
+
+      - name: Save toolchains
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: tc
+          key: clover-tc-r383902b-gcc49-v1
+
+      - name: Set up toolchain PATH
+        run: |
+          set -euo pipefail
+          CLANG_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/clang' | head -1)")")
+          GCC64_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/aarch64-linux-android-elfedit' | head -1)")")
+          GCC32_BIN=$(realpath "$(dirname "$(find tc -path '*/bin/arm-linux-androideabi-elfedit' | head -1)")")
+          echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
+          echo "GCC64_BIN=$GCC64_BIN" >> "$GITHUB_ENV"
+          echo "GCC32_BIN=$GCC32_BIN" >> "$GITHUB_ENV"
+          echo "$CLANG_BIN" >> "$GITHUB_PATH"
+          echo "$GCC64_BIN" >> "$GITHUB_PATH"
+          echo "$GCC32_BIN" >> "$GITHUB_PATH"
+
+          # Compatibility shims: clang's -no-integrated-as looks for the
+          # target-prefixed assembler, and some archives ship ld.lld as a
+          # relative symlink that does not survive extraction.
+          HOSTBIN="$PWD/tc/hostbin"
+          mkdir -p "$HOSTBIN"
+          ln -sf "$CLANG_BIN/lld" "$HOSTBIN/ld.lld"
+          ln -sf "$CLANG_BIN/llvm-ar" "$HOSTBIN/llvm-ar"
+          ln -sf "$CLANG_BIN/llvm-nm" "$HOSTBIN/llvm-nm"
+          ln -sf "$CLANG_BIN/llvm-objcopy" "$HOSTBIN/llvm-objcopy"
+          ln -sf "$CLANG_BIN/llvm-objdump" "$HOSTBIN/llvm-objdump"
+          ln -sf "$CLANG_BIN/llvm-strip" "$HOSTBIN/llvm-strip"
+          ln -sf "$GCC64_BIN/aarch64-linux-android-as" "$HOSTBIN/aarch64-linux-gnu-as"
+          ln -sf "$GCC64_BIN/aarch64-linux-android-ld" "$HOSTBIN/aarch64-linux-gnu-ld"
+          echo "$HOSTBIN" >> "$GITHUB_PATH"
+          echo "HOSTBIN=$HOSTBIN" >> "$GITHUB_ENV"
+
+          "$CLANG_BIN/clang" --version
+          "$GCC64_BIN/aarch64-linux-android-as" --version | head -1
+          ls -l "$CLANG_BIN/ld.lld" "$CLANG_BIN/lld" "$HOSTBIN/ld.lld" || true
+          "$HOSTBIN/ld.lld" --version || true
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison flex libssl-dev libelf-dev make git zip unzip python3 curl
+
+      - name: Fetch BakaSU manager (nightly) and sync KSU version
+        run: |
+          set -euo pipefail
+          mkdir -p manager/normal manager/spoofed
+          curl -fL --retry 3 -o manager/normal/Manager-release.zip \
+            "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Manager-release.zip" \
+            || { echo "::warning::normal manager download failed"; : > manager/normal/Manager-release.zip; }
+          curl -fL --retry 3 -o manager/spoofed/Spoofed-Manager-release.zip \
+            "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Spoofed-Manager-release.zip" \
+            || { echo "::warning::spoofed manager download failed"; : > manager/spoofed/Spoofed-Manager-release.zip; }
+
+          KSU_VERSION=""
+          for z in manager/spoofed/Spoofed-Manager-release.zip manager/normal/Manager-release.zip; do
+            [ -s "$z" ] || continue
+            v=$(unzip -Z1 "$z" | sed -nE 's/.*_([0-9]+)-(universal|arm64-v8a)-release\.apk$/\1/p' | head -1)
+            [ -n "$v" ] && KSU_VERSION="$v"
+          done
+          if [ -z "$KSU_VERSION" ]; then
+            KSU_VERSION=35171
+            echo "::warning::could not parse manager version, using $KSU_VERSION"
+          fi
+          echo "KSU_VERSION=$KSU_VERSION" >> "$GITHUB_ENV"
+          echo "KSU version: $KSU_VERSION"
+
+          for z in manager/normal/Manager-release.zip manager/spoofed/Spoofed-Manager-release.zip; do
+            [ -s "$z" ] || continue
+            case "$z" in
+              */normal/*) dest=manager/normal ;;
+              *)          dest=manager/spoofed ;;
+            esac
+            unzip -o -q "$z" -d "$dest"
+          done
+          # The spoofed and normal APKs have identical filenames; mark the
+          # spoofed ones so both can live in the artifact side by side.
+          for f in manager/spoofed/*.apk; do
+            [ -e "$f" ] || continue
+            mv "$f" "${f%.apk}-spoofed.apk"
+          done
+          ls -lh manager/normal manager/spoofed
+
+      - name: Build kernel
+        run: |
+          set -euo pipefail
+          export PATH="$HOSTBIN:$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          echo "PATH=$PATH"
+          which clang ld.lld llvm-ar aarch64-linux-gnu-as
+          clang --version | head -1
+          ld.lld --version | head -1
+          make O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CLANG_TARGET_ARM32=--target=arm-linux-androideabi \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LD=ld.lld \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            KSU_VERSION_OVERRIDE="$KSU_VERSION" \
+            clover_defconfig
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CLANG_TARGET_ARM32=--target=arm-linux-androideabi \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LD=ld.lld \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            KSU_VERSION_OVERRIDE="$KSU_VERSION" \
+            Image.gz-dtb 2>&1 | tee build.log
+          cp out/.config kernel-config.txt
+
+      - name: Package AnyKernel3
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          cp out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cat > anykernel/anykernel.sh <<'EOF'
+          kernel.string=clover 4.4.250 BakaSU+SUSFS+NoMount+ReKernel
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanup=1
+          device.name1=clover
+          device.name2=MI_PAD_4
+          device.name3=
+          device.name4=
+          device.name5=
+          block=/dev/block/bootdevice/by-name/boot
+          is_slot_device=0
+          ramdisk_compression=auto
+          EOF
+          (cd anykernel && zip -r9 "../clover-kernel-4.4.250-${GITHUB_REF_NAME}-${GITHUB_RUN_NUMBER}.zip" . -x '.git/*')
+
+      - name: Package component sources
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/susfs dist/nomount
+          cp fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h dist/susfs/
+          printf '%s\n' \
+            'SUSFS v2.3.0 - kernel-side source, backported to Linux 4.4.250 (clover).' \
+            'Integrated into BakaSU (ex-ReSukiSU) v4.2.0-rc3, manager 35252.' \
+            'Files: susfs.c, susfs.h, susfs_def.h.' \
+            > dist/susfs/README.txt
+          cp -a fs/nomount/. dist/nomount/
+          printf '%s\n' \
+            'NoMount v2.2.0 - kernel-side source, 4.4 compatibility patched (clover).' \
+            'Upstream: https://github.com/maxsteeel/nomount (HEAD bf1847f).' \
+            'Integrated as fs/nomount, CONFIG_NOMOUNT=y.' \
+            > dist/nomount/README.txt
+          (cd dist/susfs && zip -r9 ../susfs-4.4.250-src.zip .)
+          (cd dist/nomount && zip -r9 ../nomount-4.4.250-src.zip .)
+          ls -lh dist/*.zip
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clover-kernel-4.4.250-${{ github.ref_name }}
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+            clover-kernel-*.zip
+            kernel-config.txt
+            build.log
+          if-no-files-found: warn
+
+      - name: Upload spoofed manager artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baka-manager-spoofed
+          path: |
+            manager/spoofed/*arm64-v8a*-spoofed.apk
+            manager/spoofed/*universal*-spoofed.apk
+          if-no-files-found: warn
+
+      - name: Upload component sources artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: susfs-nomount-sources
+          path: dist/*.zip
+          if-no-files-found: warn
