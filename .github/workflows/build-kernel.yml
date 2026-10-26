@@ -187,22 +187,40 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist
-          mkdir -p dist/susfs dist/nomount
-          cp fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h dist/susfs/
-          printf '%s\n' \
-            'SUSFS v2.3.0 - kernel-side source, backported to Linux 4.4.250 (clover).' \
-            'Integrated into BakaSU (ex-ReSukiSU) v4.2.0-rc3, manager 35252.' \
-            'Files: susfs.c, susfs.h, susfs_def.h.' \
-            > dist/susfs/README.txt
-          cp -a fs/nomount/. dist/nomount/
-          printf '%s\n' \
-            'NoMount v2.2.0 - kernel-side source, 4.4 compatibility patched (clover).' \
-            'Upstream: https://github.com/maxsteeel/nomount (HEAD bf1847f).' \
-            'Integrated as fs/nomount, CONFIG_NOMOUNT=y.' \
-            > dist/nomount/README.txt
-          (cd dist/susfs && zip -r9 ../susfs-4.4.250-src.zip .)
-          (cd dist/nomount && zip -r9 ../nomount-4.4.250-src.zip .)
-          ls -lh dist/*.zip
+          mkdir -p dist
+          if [ -f fs/susfs.c ]; then
+            mkdir -p dist/susfs
+            cp fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h dist/susfs/
+            printf '%s\n' \
+              'SUSFS v2.3.0 - kernel-side source, backported to Linux 4.4.250 (clover).' \
+              'Integrated into BakaSU (ex-ReSukiSU) v4.2.0-rc3, manager 35252.' \
+              'Files: susfs.c, susfs.h, susfs_def.h.' \
+              > dist/susfs/README.txt
+            (cd dist/susfs && zip -r9 ../susfs-4.4.250-src.zip .)
+          fi
+          if [ -d fs/nomount ]; then
+            mkdir -p dist/nomount
+            cp -a fs/nomount/. dist/nomount/
+            printf '%s\n' \
+              'NoMount v2.2.0 - kernel-side source, 4.4 compatibility patched (clover).' \
+              'Upstream: https://github.com/maxsteeel/nomount (HEAD bf1847f).' \
+              'Integrated as fs/nomount, CONFIG_NOMOUNT=y.' \
+              > dist/nomount/README.txt
+            (cd dist/nomount && zip -r9 ../nomount-4.4.250-src.zip .)
+          fi
+          ls -lh dist/*.zip 2>/dev/null || true
+
+      - name: Package QCA module
+        run: |
+          set -euo pipefail
+          ko=$(find out -name 'qca_cld3_wlan.ko' | head -1)
+          if [ -n "$ko" ]; then
+            mkdir -p dist
+            cp "$ko" dist/
+            ls -lh dist/qca_cld3_wlan.ko
+          else
+            echo "WARN: qca_cld3_wlan.ko not found"
+          fi
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
@@ -212,6 +230,7 @@ jobs:
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
             clover-kernel-*.zip
+            dist/*.ko
             kernel-config.txt
             build.log
           if-no-files-found: warn
@@ -230,4 +249,4 @@ jobs:
         with:
           name: susfs-nomount-sources
           path: dist/*.zip
-          if-no-files-found: warn
+          if-no-files-found: ignore
