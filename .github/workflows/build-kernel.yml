@@ -60,8 +60,27 @@ jobs:
           echo "$CLANG_BIN" >> "$GITHUB_PATH"
           echo "$GCC64_BIN" >> "$GITHUB_PATH"
           echo "$GCC32_BIN" >> "$GITHUB_PATH"
+
+          # Compatibility shims: clang's -no-integrated-as looks for the
+          # target-prefixed assembler, and some archives ship ld.lld as a
+          # relative symlink that does not survive extraction.
+          HOSTBIN="$PWD/tc/hostbin"
+          mkdir -p "$HOSTBIN"
+          ln -sf "$CLANG_BIN/lld" "$HOSTBIN/ld.lld"
+          ln -sf "$CLANG_BIN/llvm-ar" "$HOSTBIN/llvm-ar"
+          ln -sf "$CLANG_BIN/llvm-nm" "$HOSTBIN/llvm-nm"
+          ln -sf "$CLANG_BIN/llvm-objcopy" "$HOSTBIN/llvm-objcopy"
+          ln -sf "$CLANG_BIN/llvm-objdump" "$HOSTBIN/llvm-objdump"
+          ln -sf "$CLANG_BIN/llvm-strip" "$HOSTBIN/llvm-strip"
+          ln -sf "$GCC64_BIN/aarch64-linux-android-as" "$HOSTBIN/aarch64-linux-gnu-as"
+          ln -sf "$GCC64_BIN/aarch64-linux-android-ld" "$HOSTBIN/aarch64-linux-gnu-ld"
+          echo "$HOSTBIN" >> "$GITHUB_PATH"
+          echo "HOSTBIN=$HOSTBIN" >> "$GITHUB_ENV"
+
           "$CLANG_BIN/clang" --version
           "$GCC64_BIN/aarch64-linux-android-as" --version | head -1
+          ls -l "$CLANG_BIN/ld.lld" "$CLANG_BIN/lld" "$HOSTBIN/ld.lld" || true
+          "$HOSTBIN/ld.lld" --version || true
 
       - name: Install build deps
         run: |
@@ -101,7 +120,11 @@ jobs:
       - name: Build kernel
         run: |
           set -euo pipefail
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          export PATH="$HOSTBIN:$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          echo "PATH=$PATH"
+          which clang ld.lld llvm-ar aarch64-linux-gnu-as
+          clang --version | head -1
+          ld.lld --version | head -1
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
