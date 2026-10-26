@@ -101,7 +101,7 @@ jobs:
           KSU_VERSION=""
           for z in manager/Manager-release.zip manager/Spoofed-Manager-release.zip; do
             [ -s "$z" ] || continue
-            v=$(unzip -l "$z" | grep -oE '_[0-9]+-(universal|arm64-v8a)' | head -1 | tr -dc '0-9')
+            v=$(unzip -Z1 "$z" | sed -nE 's/.*_([0-9]+)-(universal|arm64-v8a)-release\.apk$/\1/p' | head -1)
             [ -n "$v" ] && KSU_VERSION="$v"
           done
           if [ -z "$KSU_VERSION" ]; then
@@ -147,6 +147,7 @@ jobs:
             OBJDUMP=llvm-objdump STRIP=llvm-strip \
             KSU_VERSION_OVERRIDE="$KSU_VERSION" \
             Image.gz-dtb 2>&1 | tee build.log
+          cp out/.config kernel-config.txt
 
       - name: Package AnyKernel3
         run: |
@@ -176,11 +177,12 @@ jobs:
         with:
           name: clover-kernel-4.4.250-baka
           path: |
+            out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz-dtb
             out/arch/arm64/boot/Image.gz
             out/vmlinux
             out/System.map
-            out/.config
+            kernel-config.txt
             build.log
             clover-kernel-*.zip
             manager/*.zip
