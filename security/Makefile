@@ -23,6 +23,7 @@ obj-$(CONFIG_AUDIT)			+= lsm_audit.o
 obj-$(CONFIG_SECURITY_TOMOYO)		+= tomoyo/
 obj-$(CONFIG_SECURITY_APPARMOR)		+= apparmor/
 obj-$(CONFIG_SECURITY_YAMA)		+= yama/
+obj-$(CONFIG_BBG)			+= baseband-guard/
 obj-$(CONFIG_ARCH_QCOM)				+= pfe/
 obj-$(CONFIG_CGROUP_DEVICE)		+= device_cgroup.o
 
