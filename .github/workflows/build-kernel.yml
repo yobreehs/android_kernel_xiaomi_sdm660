@@ -34,11 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tc/clang tc/gcc64 tc/gcc32
-          curl -fsSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902b.tar.gz" \
+          curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902b.tar.gz" \
             | tar -xz -C tc/clang
-          curl -fsSL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android11-release.tar.gz" \
+          curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android11-release.tar.gz" \
             | tar -xz -C tc/gcc64
-          curl -fsSL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android11-release.tar.gz" \
+          curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android11-release.tar.gz" \
             | tar -xz -C tc/gcc32
           find tc -maxdepth 4 -type f -name clang -o -name aarch64-linux-android-elfedit -o -name arm-linux-androideabi-elfedit
 
