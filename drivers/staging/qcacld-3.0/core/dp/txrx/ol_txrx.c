@@ -1179,6 +1179,7 @@ static void ol_txrx_stats_display_tso(ol_txrx_pdev_handle pdev)
 			struct qdf_tso_seg_t tso_seg =
 				 TXRX_STATS_TSO_SEG(pdev, msdu_idx, seg_idx);
 
+			(void)tso_seg;
 			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_INFO_LOW,
 				 "seg idx: %d", seg_idx);
 			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_INFO_LOW,
