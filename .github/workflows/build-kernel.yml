@@ -157,7 +157,7 @@ jobs:
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip \
             KSU_VERSION_OVERRIDE="$KSU_VERSION" \
-            Image.gz-dtb 2>&1 | tee build.log
+            Image.gz-dtb modules 2>&1 | tee build.log
           cp out/.config kernel-config.txt
 
       - name: Package AnyKernel3
@@ -213,13 +213,13 @@ jobs:
       - name: Package QCA module
         run: |
           set -euo pipefail
-          ko=$(find out -name 'qca_cld3_wlan.ko' | head -1)
+          ko=$(find out/drivers/staging/qcacld-3.0 -name '*.ko' | head -1)
           if [ -n "$ko" ]; then
             mkdir -p dist
             cp "$ko" dist/
-            ls -lh dist/qca_cld3_wlan.ko
+            ls -lh dist/*.ko
           else
-            echo "WARN: qca_cld3_wlan.ko not found"
+            echo "WARN: qcacld .ko not found"
           fi
 
       - name: Upload kernel artifact

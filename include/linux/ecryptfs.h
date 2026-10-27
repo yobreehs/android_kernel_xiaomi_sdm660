@@ -146,9 +146,9 @@ size_t ecryptfs_get_salt_size(const void *ecrytpfs_data);
 bool ecryptfs_cipher_match(const void *ecrytpfs_data,
 		const unsigned char *cipher, size_t cipher_size);
 
-bool ecryptfs_is_page_in_metadata(const void *ecrytpfs_data, pgoff_t offset);
+static inline bool ecryptfs_is_page_in_metadata(const void *ecrytpfs_data, pgoff_t offset);
 
-bool ecryptfs_is_data_equal(const void *ecrytpfs_data1,
+static inline bool ecryptfs_is_data_equal(const void *ecrytpfs_data1,
 		const void *ecrytpfs_data2);
 
 #else
@@ -189,12 +189,12 @@ static inline bool ecryptfs_cipher_match(const void *ecrytpfs_data,
 	return false;
 }
 
-bool ecryptfs_is_page_in_metadata(const void *ecrytpfs_data, pgoff_t offset)
+static inline bool ecryptfs_is_page_in_metadata(const void *ecrytpfs_data, pgoff_t offset)
 {
 	return false;
 }
 
-bool ecryptfs_is_data_equal(const void *ecrytpfs_data1,
+static inline bool ecryptfs_is_data_equal(const void *ecrytpfs_data1,
 		const void *ecrytpfs_data2)
 {
 	return false;
