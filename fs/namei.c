@@ -3206,7 +3206,7 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 	 * the dentry and returns NULL. Report ENOENT (lookup_slow() already
 	 * does). Without this the NULL dentry reaches lookup_real()/
 	 * atomic_open() -> kernel BUG/panic (brene 'hide rom paths' bootloop). */
-	if (unlikely(need_lookup && !dentry))
+	if (unlikely(!dentry))
 		return -ENOENT;
 
 	/* Cached positive dentry: will open in f_op->open */
