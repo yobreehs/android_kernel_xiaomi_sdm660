@@ -109,6 +109,10 @@ jobs:
             KSU_VERSION=35171
             echo "::warning::could not parse manager version, using $KSU_VERSION"
           fi
+          # Upstream dropped the spoofed manager build (BakaSU 01c11c70), so the
+          # nightly only ships a normal-package APK. Keep the kernel uapi/version
+          # in sync with the spoofed manager the device already runs.
+          KSU_VERSION=35252
           echo "KSU_VERSION=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "KSU version: $KSU_VERSION"
 
