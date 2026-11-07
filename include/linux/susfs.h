@@ -241,3 +241,14 @@ void susfs_start_sdcard_monitor_fn(void);
 void susfs_init(void);
 
 #endif
+
+/* priority uid filter (a.k.a. uid fake) */
+#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#define SUSFS_APP_STR_BUF_SIZE 65535
+struct st_susfs_priority_uid_filter {
+	char					app_strings[SUSFS_APP_STR_BUF_SIZE];
+	int					err;
+};
+void susfs_set_priority_uid_filter(void __user **user_info);
+void susfs_parse_priority_app_strings(void);
+#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER

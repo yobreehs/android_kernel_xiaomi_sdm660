@@ -1,5 +1,8 @@
 #include <linux/version.h>
 #include <linux/cred.h>
+#include <linux/string.h>
+#include <linux/bitops.h>
+#include <linux/vmalloc.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
@@ -1556,3 +1559,352 @@ void susfs_init(void) {\
 /* No module exit is needed becuase it should never be a loadable kernel module */
 //void __init susfs_exit(void)
 
+
+/* priority uid filter (a.k.a. uid fake) */
+#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#define SUSFS_PRIORITY_UID_FILTER_MIN_UID 10000
+#define SUSFS_PRIORITY_UID_FILTER_MAX_UID 19999
+#define SUSFS_PRIORITY_UID_FILTER_UID_NUM (SUSFS_PRIORITY_UID_FILTER_MAX_UID - SUSFS_PRIORITY_UID_FILTER_MIN_UID + 1)
+#define SUSFS_PRIORITY_UID_FILTER_BITMAP_LEN BITS_TO_LONGS(SUSFS_PRIORITY_UID_FILTER_UID_NUM)
+
+struct susfs_priority_uid_filter_bitmap {
+	struct rcu_head			rcu;
+	unsigned long			bits[SUSFS_PRIORITY_UID_FILTER_BITMAP_LEN];
+};
+
+static struct susfs_priority_uid_filter_bitmap __rcu *priority_uid_filter_bitmap;
+static DEFINE_MUTEX(susfs_mutex_lock_priority_uid_filter);
+static char *susfs_priority_app_strings = NULL;
+static atomic_t susfs_priority_app_strings_running = ATOMIC_INIT(0);
+
+/* 4.4 has no kvmalloc()/kvfree() */
+static void *susfs_kvzalloc(size_t size) {
+	void *p = kzalloc(size, GFP_KERNEL);
+	if (!p)
+		p = vzalloc(size);
+	return p;
+}
+
+static void susfs_kvfree(const void *p) {
+	if (!p)
+		return;
+	if (is_vmalloc_addr(p))
+		vfree(p);
+	else
+		kfree(p);
+}
+
+static ssize_t susfs_kernel_read(struct file *f, void *buf, size_t count, loff_t *pos) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+	return kernel_read(f, buf, count, pos);
+#else
+	ssize_t ret = kernel_read(f, *pos, buf, count);
+	if (ret > 0)
+		*pos += ret;
+	return ret;
+#endif
+}
+
+static bool susfs_is_valid_app_name(const char *app_name) {
+	const char *p = app_name;
+	size_t len = strlen(app_name);
+
+	if (!len || len > 255)
+		return false;
+	if (!strcmp(app_name, ".") || !strcmp(app_name, ".."))
+		return false;
+	for (; *p != '\0'; p++) {
+		if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+		    (*p >= '0' && *p <= '9') || *p == '.' || *p == '_')
+			continue;
+		return false;
+	}
+	return true;
+}
+
+static int susfs_resolve_priority_app_uid(const char *app_name, uid_t *uid) {
+	struct file *fp;
+	char *buf = NULL;
+	char *line, *tmp, *p;
+	char *pkg_name, *uid_str;
+	loff_t pos = 0;
+	size_t size;
+	unsigned long val;
+	int ret = -ENOENT;
+
+	if (!app_name || !*app_name || !uid)
+		return -EINVAL;
+	if (!susfs_is_valid_app_name(app_name))
+		return -EINVAL;
+
+	fp = filp_open("/data/system/packages.list", O_RDONLY | O_NOATIME, 0);
+	if (IS_ERR(fp)) {
+		ret = PTR_ERR(fp);
+		SUSFS_LOGE("failed to open /data/system/packages.list: %d\n", ret);
+		return ret;
+	}
+
+	size = i_size_read(file_inode(fp));
+	if (size <= 0 || size > (4 * 1024 * 1024)) {
+		filp_close(fp, NULL);
+		return -EFBIG;
+	}
+
+	buf = vmalloc(size + 1);
+	if (!buf) {
+		filp_close(fp, NULL);
+		return -ENOMEM;
+	}
+	buf[size] = '\0';
+
+	ret = susfs_kernel_read(fp, buf, size, &pos);
+	filp_close(fp, NULL);
+	if (ret != (int)size) {
+		vfree(buf);
+		return -EIO;
+	}
+
+	line = buf;
+	while (line && *line) {
+		p = strchr(line, '\n');
+		if (p) {
+			*p = '\0';
+			tmp = p + 1;
+		} else {
+			tmp = NULL;
+		}
+
+		if (*line == '\0' || *line == '\r') {
+			line = tmp;
+			continue;
+		}
+
+		pkg_name = strsep(&line, " \t");
+		if (!pkg_name || *pkg_name == '\0') {
+			line = tmp;
+			continue;
+		}
+
+		uid_str = strsep(&line, " \t");
+		if (!uid_str || *uid_str == '\0') {
+			line = tmp;
+			continue;
+		}
+
+		if (!strcmp(pkg_name, app_name)) {
+			if (kstrtoul(uid_str, 10, &val)) {
+				vfree(buf);
+				return -EINVAL;
+			}
+			*uid = (uid_t)val % 100000;
+			vfree(buf);
+			if (*uid < SUSFS_PRIORITY_UID_FILTER_MIN_UID ||
+			    *uid > SUSFS_PRIORITY_UID_FILTER_MAX_UID)
+				return -EINVAL;
+			return 0;
+		}
+		line = tmp;
+	}
+
+	vfree(buf);
+	return -ENOENT;
+}
+
+static int susfs_parse_priority_app_names(char *app_str, unsigned long *bits, bool skip_failed) {
+	char *token = NULL;
+	char *saveptr = app_str;
+	uid_t uid = 0;
+	int ret;
+
+	while ((token = strsep(&saveptr, ",")) != NULL) {
+		token = strim(token);
+		if (*token == '\0')
+			continue;
+		if (!susfs_is_valid_app_name(token)) {
+			SUSFS_LOGE("invalid app name '%s'\n", token);
+			return -EINVAL;
+		}
+		ret = susfs_resolve_priority_app_uid(token, &uid);
+		if (ret) {
+			if (skip_failed)
+				continue;
+			return ret;
+		}
+		if (uid < SUSFS_PRIORITY_UID_FILTER_MIN_UID || uid > SUSFS_PRIORITY_UID_FILTER_MAX_UID) {
+			SUSFS_LOGE("the uid %u of the app '%s' is out of the allowed range [%d, %d]\n",
+					uid, token, SUSFS_PRIORITY_UID_FILTER_MIN_UID,
+					SUSFS_PRIORITY_UID_FILTER_MAX_UID);
+			if (!skip_failed)
+				return -EINVAL;
+			continue;
+		}
+		set_bit(uid - SUSFS_PRIORITY_UID_FILTER_MIN_UID, bits);
+		SUSFS_LOGI("app_name '%s', uid '%u' is now added to priority_uid_filter_bitmap\n", token, uid);
+	}
+	return 0;
+}
+
+void susfs_set_priority_uid_filter(void __user **user_info) {
+	struct st_susfs_priority_uid_filter *info = NULL;
+	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
+	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
+	char *new_app_strings = NULL;
+	const struct cred *saved = NULL;
+	size_t app_str_len = 0;
+	int err = 0;
+	static bool is_uid_filter_set_before = false;
+
+	info = susfs_kvzalloc(sizeof(*info));
+	if (!info) {
+		err = -ENOMEM;
+		goto out_copy_to_user;
+	}
+
+	if (copy_from_user(info, (struct st_susfs_priority_uid_filter __user*)*user_info, sizeof(*info))) {
+		err = -EFAULT;
+		goto out_copy_to_user;
+	}
+
+	if (!memchr(info->app_strings, '\0', sizeof(info->app_strings))) {
+		SUSFS_LOGE("the app names string is not null terminated\n");
+		err = -EINVAL;
+		goto out_copy_to_user;
+	}
+	if (*info->app_strings == '\0') {
+		SUSFS_LOGE("the app names string cannot be empty\n");
+		err = -EINVAL;
+		goto out_copy_to_user;
+	}
+
+	app_str_len = strlen(info->app_strings);
+	new_app_strings = susfs_kvzalloc(app_str_len + 1);
+	if (!new_app_strings) {
+		err = -ENOMEM;
+		goto out_copy_to_user;
+	}
+	memcpy(new_app_strings, info->app_strings, app_str_len + 1);
+
+	new_bitmap = kzalloc(sizeof(*new_bitmap), GFP_KERNEL);
+	if (!new_bitmap) {
+		err = -ENOMEM;
+		goto out_free_new_app_strings;
+	}
+
+	/* /data/system/packages.list is only readable in the KSU domain */
+	saved = override_creds(ksu_cred);
+	if (is_uid_filter_set_before)
+		SUSFS_LOGI("renewing the priority uid filter\n");
+	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, true);
+	revert_creds(saved);
+	saved = NULL;
+
+	if (err)
+		goto out_free_new_bitmap;
+
+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
+	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
+	rcu_assign_pointer(priority_uid_filter_bitmap, new_bitmap);
+	new_bitmap = NULL;
+	susfs_kvfree(susfs_priority_app_strings);
+	susfs_priority_app_strings = new_app_strings;
+	new_app_strings = NULL;
+	is_uid_filter_set_before = true;
+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
+	synchronize_rcu();
+	if (old_bitmap)
+		kfree_rcu(old_bitmap, rcu);
+
+	SUSFS_LOGI("the priority uid filter is set\n");
+	err = 0;
+
+out_free_new_bitmap:
+	if (new_bitmap)
+		kfree(new_bitmap);
+out_free_new_app_strings:
+	if (new_app_strings)
+		susfs_kvfree(new_app_strings);
+out_copy_to_user:
+	if (copy_to_user(&((struct st_susfs_priority_uid_filter __user*)*user_info)->err, &err, sizeof(err)))
+		err = -EFAULT;
+	SUSFS_LOGI("CMD_SUSFS_SET_PRIORITY_UID_FILTER -> ret: %d\n", err);
+	if (info)
+		susfs_kvfree(info);
+}
+
+static int susfs_priority_app_strings_worker(void *data) {
+	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
+	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
+	const struct cred *saved = NULL;
+	char *app_strings = NULL;
+	size_t app_str_len = 0;
+	int ret = 0;
+
+	new_bitmap = kzalloc(sizeof(*new_bitmap), GFP_KERNEL);
+	if (!new_bitmap)
+		goto out;
+
+	saved = override_creds(ksu_cred);
+
+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
+	if (susfs_priority_app_strings) {
+		app_str_len = strlen(susfs_priority_app_strings);
+		app_strings = susfs_kvzalloc(app_str_len + 1);
+		if (app_strings)
+			memcpy(app_strings, susfs_priority_app_strings, app_str_len + 1);
+	}
+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
+
+	if (!app_strings)
+		goto out_restore_creds;
+
+	ret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true);
+	if (ret)
+		goto out_restore_creds;
+
+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
+	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
+	rcu_assign_pointer(priority_uid_filter_bitmap, new_bitmap);
+	new_bitmap = NULL;
+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
+	synchronize_rcu();
+	if (old_bitmap)
+		kfree_rcu(old_bitmap, rcu);
+	SUSFS_LOGI("the uids of the priority uid filter are resolved again\n");
+
+out_restore_creds:
+	revert_creds(saved);
+out:
+	if (new_bitmap)
+		kfree(new_bitmap);
+	if (app_strings)
+		susfs_kvfree(app_strings);
+	atomic_set(&susfs_priority_app_strings_running, 0);
+	return ret;
+}
+
+void susfs_parse_priority_app_strings(void) {
+	if (atomic_cmpxchg(&susfs_priority_app_strings_running, 0, 1))
+		return;
+	if (IS_ERR(kthread_run(susfs_priority_app_strings_worker, NULL, "susfs_gpsp_appstr"))) {
+		atomic_set(&susfs_priority_app_strings_running, 0);
+		SUSFS_LOGE("failed to create the thread susfs_priority_app_strings\n");
+	}
+}
+
+bool susfs_is_priority_uid_filtered(uid_t uid) {
+	struct susfs_priority_uid_filter_bitmap *bitmap;
+	uid_t app_id = uid % 100000;
+
+	if (app_id < SUSFS_PRIORITY_UID_FILTER_MIN_UID ||
+	    app_id > SUSFS_PRIORITY_UID_FILTER_MAX_UID)
+		return false;
+
+	/* caller must hold rcu_read_lock() */
+	bitmap = rcu_dereference(priority_uid_filter_bitmap);
+	if (likely(bitmap)) {
+		if (test_bit(app_id - SUSFS_PRIORITY_UID_FILTER_MIN_UID, bitmap->bits))
+			return true;
+	}
+	return false;
+}
+#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
