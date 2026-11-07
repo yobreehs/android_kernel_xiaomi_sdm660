@@ -91,16 +91,13 @@ jobs:
       - name: Fetch BakaSU manager (nightly) and sync KSU version
         run: |
           set -euo pipefail
-          mkdir -p manager/normal manager/spoofed
+          mkdir -p manager/normal
           curl -fL --retry 3 -o manager/normal/Manager-release.zip \
             "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Manager-release.zip" \
             || { echo "::warning::normal manager download failed"; : > manager/normal/Manager-release.zip; }
-          curl -fL --retry 3 -o manager/spoofed/Spoofed-Manager-release.zip \
-            "https://nightly.link/Baka-SU/BakaSU/workflows/build-manager/main/Spoofed-Manager-release.zip" \
-            || { echo "::warning::spoofed manager download failed"; : > manager/spoofed/Spoofed-Manager-release.zip; }
 
           KSU_VERSION=""
-          for z in manager/spoofed/Spoofed-Manager-release.zip manager/normal/Manager-release.zip; do
+          for z in manager/normal/Manager-release.zip; do
             [ -s "$z" ] || continue
             v=$(unzip -Z1 "$z" | sed -nE 's/.*_([0-9]+)-(universal|arm64-v8a)-release\.apk$/\1/p' | head -1)
             [ -n "$v" ] && KSU_VERSION="$v"
@@ -109,28 +106,11 @@ jobs:
             KSU_VERSION=35171
             echo "::warning::could not parse manager version, using $KSU_VERSION"
           fi
-          # Upstream dropped the spoofed manager build (BakaSU 01c11c70), so the
-          # nightly only ships a normal-package APK. Keep the kernel uapi/version
-          # in sync with the spoofed manager the device already runs.
-          KSU_VERSION=35252
           echo "KSU_VERSION=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "KSU version: $KSU_VERSION"
 
-          for z in manager/normal/Manager-release.zip manager/spoofed/Spoofed-Manager-release.zip; do
-            [ -s "$z" ] || continue
-            case "$z" in
-              */normal/*) dest=manager/normal ;;
-              *)          dest=manager/spoofed ;;
-            esac
-            unzip -o -q "$z" -d "$dest"
-          done
-          # The spoofed and normal APKs have identical filenames; mark the
-          # spoofed ones so both can live in the artifact side by side.
-          for f in manager/spoofed/*.apk; do
-            [ -e "$f" ] || continue
-            mv "$f" "${f%.apk}-spoofed.apk"
-          done
-          ls -lh manager/normal manager/spoofed
+          unzip -o -q manager/normal/Manager-release.zip -d manager/normal
+          ls -lh manager/normal
 
       - name: Build kernel
         run: |
@@ -226,12 +206,12 @@ jobs:
             build.log
           if-no-files-found: warn
 
-      - name: Upload spoofed manager artifact
+      - name: Upload manager artifact
         uses: actions/upload-artifact@v4
         with:
-          name: baka-manager-spoofed
+          name: baka-manager
           path: |
-            manager/spoofed/*arm64-v8a*-spoofed.apk
+            manager/normal/*arm64-v8a*release.apk
             manager/spoofed/*universal*-spoofed.apk
           if-no-files-found: warn
 
